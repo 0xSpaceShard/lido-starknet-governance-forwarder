@@ -1,14 +1,15 @@
 
 mod testBridgeExecutor {
     // Importing required modules and types from the starknet crate and other dependencies
-    use starknet::{ContractAddress, EthAddress, get_block_timestamp, ClassHash, get_caller_address, get_contract_address, SyscallResultTrait, syscalls::{
+    use core::traits::Into;
+use starknet::{ContractAddress, EthAddress, get_block_timestamp, ClassHash, get_caller_address, get_contract_address, SyscallResultTrait, syscalls::{
         call_contract_syscall, library_call_syscall,
     }};
     use lido_forward::bridge_executor::interface::{ActionSet, ActionSetState, IBridgeExecutorDispatcher, IBridgeExecutorDispatcherTrait, CallOrDelegateCall}; 
     use lido_forward::bridge_executor::bridge_executor::BridgeExecutor; 
     use lido_forward::mock_delegate::mock_delegate::{MockDelegate, IMockDelegateDispatcher, IMockDelegateDispatcherTrait};
     use core::integer::{u128_byte_reverse, BoundedInt}; 
-    use snforge_std::{ declare, ContractClassTrait, cheat_caller_address, CheatSpan, L1HandlerTrait, spy_events, SpyOn, EventSpy, EventAssertions, store, load, map_entry_address, cheat_block_timestamp };
+    use snforge_std::{ declare, ContractClass, ContractClassTrait, cheat_caller_address, CheatSpan, L1HandlerTrait, spy_events, SpyOn, EventSpy, EventAssertions, store, load, map_entry_address, cheat_block_timestamp };
 
     mod TestConstants {
         pub const GUARDIAN: felt252 = 2000;
@@ -22,14 +23,26 @@ mod testBridgeExecutor {
         pub const INCR_COUNTER_SELECTOR: felt252 = 0x0245f9bea6574169db91599999bf914dd43aebc1e0544bdc96c9f401a52b8768;
     }
 
-    fn setup() -> IBridgeExecutorDispatcher {
+    fn fillCallData(delay: u64, grace_period: u64, minimum_delay: u64, maximum_delay: u64, guardian: felt252, ethereu_governance_executor: felt252) -> Array<felt252> {
         let mut calldata: Array<felt252> = ArrayTrait::new();
-        calldata.append(TestConstants::DELAY.into());
-        calldata.append(TestConstants::GRACE_PERIOD.into());
-        calldata.append(TestConstants::MINIMUM_DELAY.into());
-        calldata.append(TestConstants::MAXIMUM_DELAY.into());
-        calldata.append(TestConstants::GUARDIAN);
-        calldata.append(TestConstants::ETHEREUM_GOVERNANCE_EXECUTOR);
+        calldata.append(delay.into());
+        calldata.append(grace_period.into());
+        calldata.append(minimum_delay.into());
+        calldata.append(maximum_delay.into());
+        calldata.append(guardian);
+        calldata.append(ethereu_governance_executor);
+        calldata
+    }
+
+    fn setup() -> IBridgeExecutorDispatcher {
+        let calldata = fillCallData(
+            TestConstants::DELAY, 
+            TestConstants::GRACE_PERIOD, 
+            TestConstants::MINIMUM_DELAY.into(), 
+            TestConstants::MAXIMUM_DELAY.into(),
+            TestConstants::GUARDIAN, 
+            TestConstants::ETHEREUM_GOVERNANCE_EXECUTOR
+        );
         let contract = declare("BridgeExecutor").unwrap();
         let (contract_address, _) = contract.deploy(@calldata).unwrap();
         IBridgeExecutorDispatcher { contract_address: contract_address }
@@ -136,6 +149,67 @@ mod testBridgeExecutor {
         let _bridge_executor = setup();
     }
 
+    // constructor
+    #[test]
+    #[should_panic(expected: ('Result::unwrap failed.',))]
+    fn test_constructor_with_wrong_grace_period () {
+        let calldata = fillCallData(
+            TestConstants::DELAY, 
+            0, 
+            TestConstants::MINIMUM_DELAY, 
+            TestConstants::MAXIMUM_DELAY,
+            TestConstants::GUARDIAN, 
+            TestConstants::ETHEREUM_GOVERNANCE_EXECUTOR 
+        );
+        let contract = declare("BridgeExecutor").unwrap();
+        contract.deploy(@calldata).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected: ('Result::unwrap failed.',))]
+    fn test_constructor_with_wrong_minimum_delay () {
+        let calldata = fillCallData(
+            TestConstants::DELAY, 
+            TestConstants::GRACE_PERIOD, 
+            400, 
+            TestConstants::MAXIMUM_DELAY,
+            TestConstants::GUARDIAN, 
+            TestConstants::ETHEREUM_GOVERNANCE_EXECUTOR 
+        );
+        let contract = declare("BridgeExecutor").unwrap();
+        contract.deploy(@calldata).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected: ('Result::unwrap failed.',))]
+    fn test_constructor_with_wrong_maximum_delay () {
+        let calldata = fillCallData(
+            TestConstants::DELAY, 
+            TestConstants::GRACE_PERIOD, 
+            TestConstants::MINIMUM_DELAY.into(), 
+            1,
+            TestConstants::GUARDIAN, 
+            TestConstants::ETHEREUM_GOVERNANCE_EXECUTOR 
+        );
+        let contract = declare("BridgeExecutor").unwrap();
+        contract.deploy(@calldata).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected: ('Result::unwrap failed.',))]
+    fn test_constructor_with_wrong_ethereum_governance_executor () {
+        let calldata = fillCallData(
+            TestConstants::DELAY, 
+            TestConstants::GRACE_PERIOD, 
+            TestConstants::MINIMUM_DELAY.into(), 
+            TestConstants::MAXIMUM_DELAY.into(),
+            TestConstants::GUARDIAN, 
+            0
+        );
+        let contract = declare("BridgeExecutor").unwrap();
+        contract.deploy(@calldata).unwrap();
+    }
+
     // setters
 
     #[test]
@@ -215,8 +289,9 @@ mod testBridgeExecutor {
     #[test]
     fn test_update_minimum_delay(a: u64) {
         let bridge_executor = setup();
+        let delay = bridge_executor.get_delay();
         cheat_caller_address(bridge_executor.contract_address, bridge_executor.contract_address, CheatSpan::TargetCalls(1));
-        let new_minimum_delay = between_u64(0, TestConstants::MAXIMUM_DELAY - 1, a);
+        let new_minimum_delay = between_u64(0, delay, a);
         bridge_executor.update_minimum_delay(new_minimum_delay);
         let minimum_delay = bridge_executor.get_minimum_delay();
         assert(minimum_delay == new_minimum_delay, 'invalid md')
@@ -241,8 +316,9 @@ mod testBridgeExecutor {
     #[test]
     fn test_update_maximum_delay(a: u64) {
         let bridge_executor = setup();
+        let delay = bridge_executor.get_delay();
         cheat_caller_address(bridge_executor.contract_address, bridge_executor.contract_address, CheatSpan::TargetCalls(1));
-        let new_maximum_delay = between_u64(TestConstants::MINIMUM_DELAY + 1, BoundedInt::max(), a);
+        let new_maximum_delay = between_u64(delay, BoundedInt::max(), a);
         bridge_executor.update_maximum_delay(new_maximum_delay);
         let maximum_delay = bridge_executor.get_maximum_delay();
         assert(maximum_delay == new_maximum_delay, 'invalid md')
@@ -500,7 +576,6 @@ mod testBridgeExecutor {
         bridge_executor.cancel(0);
     }
 
-    
 
     #[test]
     #[should_panic(expected: ('Only Queued Actions',))]

@@ -52,7 +52,6 @@ pub trait IBridgeExecutor<TStorage> {
     fn update_ethereum_governance_executor(ref self: TStorage, ethereum_governance_executor: EthAddress);
 
     // LOGIC
-
     fn execute(ref self: TStorage, actions_set_id: u32);
     fn cancel(ref self: TStorage, actions_set_id: u32); 
 }
