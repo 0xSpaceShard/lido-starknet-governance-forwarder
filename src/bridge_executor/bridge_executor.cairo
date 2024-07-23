@@ -9,6 +9,8 @@ pub mod BridgeExecutor {
     }};
     use lido_forward::bridge_executor::interface::{ActionSet, ActionSetState, IBridgeExecutor, CallOrDelegateCall}; 
     use core::integer::{u128_byte_reverse};
+    use core::num::traits::Zero;
+
 
     // Storage definition for BridgeExecutor
     #[storage]
@@ -44,7 +46,7 @@ pub mod BridgeExecutor {
         MaximumDelayUpdate: MaximumDelayUpdate,
         ActionsSetQueued: ActionsSetQueued,
         ActionsSetExecuted: ActionsSetExecuted,
-        ActionsSetCanceled: ActionsSetCanceled
+        ActionsSetCanceled: ActionsSetCanceled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -121,6 +123,7 @@ pub mod BridgeExecutor {
         pub const DUPLICATE_ACTIONS: felt252 = 'Duplicate action'; // Error when an action is queued that duplicates an existing one.
         pub const ONLY_QUEUED_ACTIONS: felt252 = 'Only Queued Actions'; // Error when trying to execute or cancel an action that is not queued.
         pub const TIMELOCK_NOT_FINISHED: felt252 = 'Timelock Not Finished'; // Error when an action is attempted to be executed before its timelock has expired.
+        pub const ZERO_ADDRESS: felt252 = 'Zero address is not allowed'; // Error when an address is zero.
     }
 
     /// Module `Constants` defines immutable values used throughout the BridgeExecutor contract.
@@ -158,9 +161,10 @@ pub mod BridgeExecutor {
     ) {
         assert(
             grace_period >= Constants::MINIMUM_GRACE_PERIOD
-                || minimum_delay < maximum_delay
-                || delay >= minimum_delay
-                || delay <= maximum_delay,
+                && minimum_delay < maximum_delay
+                && delay >= minimum_delay
+                && delay <= maximum_delay
+                && ethereum_governance_executor.is_non_zero(),
             Errors::INVALID_INIT_PARAMS
         );
         self._update_delay(delay);
@@ -325,7 +329,9 @@ pub mod BridgeExecutor {
         fn update_minimum_delay(ref self: ContractState, minimum_delay: u64) {
             self._only_this(); // Ensures only the contract itself can call this function.
             let maximum_delay = self.maximum_delay.read(); // Reads the current maximum delay.
+            let delay = self.delay.read(); // Reads the current delay.
             assert(maximum_delay > minimum_delay, Errors::MINIMUM_DELAY_TOO_LONG); // Ensures the new minimum delay is less than the maximum.
+            assert(delay >= minimum_delay, Errors::MINIMUM_DELAY_TOO_LONG); // Ensures the delay is greater or equal to the new minimum delay.
             self._update_minimum_delay(minimum_delay);
         }
 
@@ -335,7 +341,9 @@ pub mod BridgeExecutor {
         fn update_maximum_delay(ref self: ContractState, maximum_delay: u64) {
             self._only_this(); // Ensures only the contract itself can call this function.
             let minimum_delay = self.minimum_delay.read(); // Reads the current minimum delay.
+            let delay = self.delay.read(); // Reads the current delay.
             assert(maximum_delay > minimum_delay, Errors::MAXIMUM_DELAY_TOO_SHORT); // Ensures the new maximum delay is greater than the minimum.
+            assert(delay <= maximum_delay, Errors::MAXIMUM_DELAY_TOO_SHORT); // Ensures the delay is smaller or equal to the new maximum delay.
             self._update_maximum_delay(maximum_delay);
         }
 
@@ -434,15 +442,19 @@ pub mod BridgeExecutor {
         fn _get_current_state(self: @ContractState, action_set_id: u32) -> ActionSetState {
             let actions_set_counter = self.actions_set_counter.read(); // Reads the last action set counter.
             assert(actions_set_counter > action_set_id, Errors::INVALID_ACTIONS_SET_ID); // Validates the action set ID.
-            let action_set = self._load_actions_set_by_id(action_set_id); // Loads the action set details.
-            if (action_set.canceled) {
+            // Read the status flags for the action set.
+            let canceled = self.canceled.read(action_set_id);
+            let executed = self.executed.read(action_set_id);
+            let execution_time = self.execution_time.read(action_set_id);
+
+            if (canceled) {
                 ActionSetState::Canceled(())
-            } else if (action_set.executed) {
+            } else if (executed) {
                 ActionSetState::Executed(())
             } else {
                 let block_timestamp = get_block_timestamp(); // Gets the current block timestamp.
                 let grace_period = self.grace_period.read(); // Reads the grace period.
-                if (block_timestamp > action_set.execution_time + grace_period) {
+                if (block_timestamp > execution_time + grace_period) {
                     ActionSetState::Expired(())
                 } else {
                     ActionSetState::Queued(())

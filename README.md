@@ -24,7 +24,51 @@ This will compile the available smart contracts.
 
 Run the full suite of unit tests.
 
-
 ### Scripts 
 
-TBD
+Create a `.env` and add RPC, account address, private keys, and the bridge executor address as mentioned in the `.env.example` file.
+
+### Starknet
+
+**Declare**
+
+`npx ts-node scripts_l2/declareContracts.ts --contract BridgeExecutor`
+
+**Deploy**
+`npx ts-node scripts_l2/deployContracts.ts --contract BridgeExecutor.`
+
+**Execute**
+`npx ts-node scripts_l2/execute.ts --contract BridgeExecutor.`
+
+**Cancel**
+`npx ts-node scripts_l2/cancel.ts --contract BridgeExecutor.`
+
+### Send message from ethereum
+
+Install Hardhat with `yarn install` and run the tasks with:
+`npx hardhat <function_name> <param> --network <selected network>`
+
+Scripts for basic functions can be run directly such as `update_guardian`, `update_delay`, `update_grace_period`, `update_minimum_delay`, `update_maximum_delay`, `update_ethereum_governance_executor`.
+
+If you want to execute a custom function, you can add your own task in `scripts_l1/tasks.ts`. You just need to add all the calls you want to execute.
+
+For each call:
+
+- The first element is a boolean (1 if it is a delegated call, 0 if a simple call).
+- The second element is the target address or the target hash if it's a delegate call.
+- The third element is the function selector.
+- The fourth element is the size of the calldata.
+- All other elements are calldata elements (be careful, for `u256`, low and high must be provided).
+
+**Example:**
+```typescript
+const multicall = [];
+const update_grace_period_call = [
+  0,
+  bridgeExecutor,
+  hash.getSelector('update_grace_period'),
+  1,
+  parseFloat(taskArgs.param1)
+];
+multicall.push(update_grace_period_call);
+
